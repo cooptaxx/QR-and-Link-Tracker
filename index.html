@@ -5,10 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>QR Tracker App</title>
   <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     body {
       font-family: Arial, sans-serif;
-      max-width: 900px;
+      max-width: 1100px;
       margin: 0 auto;
       padding: 20px;
       background: #f7f7f7;
@@ -47,6 +48,22 @@
       background: #444;
     }
 
+    .secondary-btn {
+      background: #555;
+    }
+
+    .secondary-btn:hover {
+      background: #666;
+    }
+
+    .danger-btn {
+      background: #a33;
+    }
+
+    .danger-btn:hover {
+      background: #c44;
+    }
+
     .event {
       border-bottom: 1px solid #eee;
       padding: 12px 0;
@@ -63,7 +80,9 @@
       word-break: break-all;
     }
 
-    .event-actions {
+    .event-actions,
+    .campaign-actions,
+    .top-actions {
       display: flex;
       gap: 10px;
       flex-wrap: wrap;
@@ -71,7 +90,9 @@
     }
 
     .event-actions button,
-    .event-actions a {
+    .event-actions a,
+    .campaign-actions button,
+    .top-actions button {
       width: auto;
     }
 
@@ -167,13 +188,97 @@
       padding: 30px;
       text-align: center;
     }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-top: 10px;
+    }
+
+    .stat-box {
+      background: #fafafa;
+      border: 1px solid #e5e5e5;
+      border-radius: 10px;
+      padding: 14px;
+    }
+
+    .stat-label {
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 6px;
+    }
+
+    .stat-value {
+      font-size: 24px;
+      font-weight: bold;
+      word-break: break-word;
+    }
+
+    .stat-sub {
+      font-size: 12px;
+      color: #666;
+      margin-top: 6px;
+    }
+
+    .chart-wrap {
+      position: relative;
+      height: 320px;
+      margin-top: 10px;
+    }
   </style>
 </head>
 <body>
   <h1>QR Tracker App</h1>
-  <p>This version connects to Supabase, lets you create campaigns and events, tracks clicks, and generates QR codes.</p>
+  <p>This version connects to Supabase, tracks clicks, generates QR codes, shows charts, and lets you manage events and campaigns.</p>
 
   <div id="message"></div>
+
+  <div class="top-actions">
+    <button class="secondary-btn" onclick="refreshAll()">Refresh Counts</button>
+  </div>
+
+  <div class="card">
+    <h2>Analytics</h2>
+    <div class="stats-grid">
+      <div class="stat-box">
+        <div class="stat-label">Total Clicks</div>
+        <div class="stat-value" id="stat-total-clicks">0</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Total Campaigns</div>
+        <div class="stat-value" id="stat-total-campaigns">0</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Total Events</div>
+        <div class="stat-value" id="stat-total-events">0</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Top Event</div>
+        <div class="stat-value" id="stat-top-event">-</div>
+        <div class="stat-sub" id="stat-top-event-clicks"></div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Top Campaign</div>
+        <div class="stat-value" id="stat-top-campaign">-</div>
+        <div class="stat-sub" id="stat-top-campaign-clicks"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Clicks by Event</h2>
+    <div class="chart-wrap">
+      <canvas id="eventChart"></canvas>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Clicks by Campaign</h2>
+    <div class="chart-wrap">
+      <canvas id="campaignChart"></canvas>
+    </div>
+  </div>
 
   <div class="card">
     <h2>Add Campaign</h2>
@@ -227,6 +332,8 @@
     let campaigns = [];
     let events = [];
     let activeQrEvent = null;
+    let eventChartInstance = null;
+    let campaignChartInstance = null;
 
     function showMessage(text, type = 'success') {
       const box = document.getElementById('message');
@@ -254,6 +361,13 @@
       return base + '?id=' + encodeURIComponent(eventId);
     }
 
+    async function refreshAll() {
+      clearMessage();
+      await loadCampaigns();
+      await loadEvents();
+      showMessage('Counts refreshed.', 'success');
+    }
+
     async function loadCampaigns() {
       try {
         const res = await fetch(
@@ -269,34 +383,12 @@
         campaigns = await res.json();
         renderCampaigns();
         populateCampaignDropdown();
+        renderAnalytics();
+        renderCharts();
       } catch (err) {
         showMessage(err.message, 'error');
         document.getElementById('campaign-list').innerHTML = 'Could not load campaigns.';
       }
-    }
-
-    function renderCampaigns() {
-      const list = document.getElementById('campaign-list');
-
-      if (!campaigns.length) {
-        list.innerHTML = 'No campaigns found yet.';
-        return;
-      }
-
-      list.innerHTML = campaigns.map(c => `
-        <div class="event">
-          <strong>${escapeHtml(c.name)}</strong><br>
-          <span class="small">ID: ${escapeHtml(c.id)}</span>
-        </div>
-      `).join('');
-    }
-
-    function populateCampaignDropdown() {
-      const select = document.getElementById('campaign-select');
-
-      select.innerHTML =
-        '<option value="">Select a campaign</option>' +
-        campaigns.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`).join('');
     }
 
     async function loadEvents() {
@@ -313,10 +405,44 @@
 
         events = await res.json();
         renderEvents();
+        renderAnalytics();
+        renderCharts();
       } catch (err) {
         showMessage(err.message, 'error');
         document.getElementById('event-list').innerHTML = 'Could not load events.';
       }
+    }
+
+    function renderCampaigns() {
+      const list = document.getElementById('campaign-list');
+
+      if (!campaigns.length) {
+        list.innerHTML = 'No campaigns found yet.';
+        return;
+      }
+
+      list.innerHTML = campaigns.map(c => {
+        const linkedEvents = events.filter(e => e.campaign_id === c.id).length;
+
+        return `
+          <div class="event">
+            <strong>${escapeHtml(c.name)}</strong><br>
+            <span class="small">ID: ${escapeHtml(c.id)}</span><br>
+            <span class="small">Events in campaign: ${linkedEvents}</span>
+            <div class="campaign-actions">
+              <button class="danger-btn" onclick="deleteCampaign('${escapeHtml(c.id)}')">Delete Campaign</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function populateCampaignDropdown() {
+      const select = document.getElementById('campaign-select');
+
+      select.innerHTML =
+        '<option value="">Select a campaign</option>' +
+        campaigns.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`).join('');
     }
 
     function getCampaignName(campaignId) {
@@ -345,11 +471,120 @@
 
             <div class="event-actions">
               <button onclick="showQR('${escapeHtml(e.id)}')">Show QR</button>
+              <button onclick="copyTrackingLink('${escapeHtml(e.id)}')">Copy Link</button>
+              <button class="secondary-btn" onclick="resetEventClicks('${escapeHtml(e.id)}')">Reset Clicks</button>
+              <button class="danger-btn" onclick="deleteEvent('${escapeHtml(e.id)}')">Delete Event</button>
               <a class="link-btn" href="${trackingLink}" target="_blank">Open Tracking Link</a>
             </div>
           </div>
         `;
       }).join('');
+    }
+
+    function renderAnalytics() {
+      const totalClicks = events.reduce((sum, e) => sum + (Number(e.clicks) || 0), 0);
+      const totalCampaigns = campaigns.length;
+      const totalEvents = events.length;
+
+      let topEvent = null;
+      for (const event of events) {
+        if (!topEvent || (Number(event.clicks) || 0) > (Number(topEvent.clicks) || 0)) {
+          topEvent = event;
+        }
+      }
+
+      const campaignTotals = {};
+      for (const event of events) {
+        const campaignName = getCampaignName(event.campaign_id);
+        campaignTotals[campaignName] = (campaignTotals[campaignName] || 0) + (Number(event.clicks) || 0);
+      }
+
+      let topCampaignName = null;
+      let topCampaignClicks = 0;
+      for (const name in campaignTotals) {
+        if (campaignTotals[name] > topCampaignClicks) {
+          topCampaignName = name;
+          topCampaignClicks = campaignTotals[name];
+        }
+      }
+
+      document.getElementById('stat-total-clicks').textContent = totalClicks;
+      document.getElementById('stat-total-campaigns').textContent = totalCampaigns;
+      document.getElementById('stat-total-events').textContent = totalEvents;
+
+      document.getElementById('stat-top-event').textContent =
+        topEvent ? topEvent.name : '-';
+      document.getElementById('stat-top-event-clicks').textContent =
+        topEvent ? `${Number(topEvent.clicks) || 0} clicks` : '';
+
+      document.getElementById('stat-top-campaign').textContent =
+        topCampaignName || '-';
+      document.getElementById('stat-top-campaign-clicks').textContent =
+        topCampaignName ? `${topCampaignClicks} clicks` : '';
+    }
+
+    function renderCharts() {
+      renderEventChart();
+      renderCampaignChart();
+      renderCampaigns();
+    }
+
+    function renderEventChart() {
+      const ctx = document.getElementById('eventChart').getContext('2d');
+
+      const labels = events.map(e => e.name);
+      const data = events.map(e => Number(e.clicks) || 0);
+
+      if (eventChartInstance) {
+        eventChartInstance.destroy();
+      }
+
+      eventChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Clicks',
+            data: data
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false
+        }
+      });
+    }
+
+    function renderCampaignChart() {
+      const ctx = document.getElementById('campaignChart').getContext('2d');
+
+      const campaignTotals = {};
+      for (const event of events) {
+        const campaignName = getCampaignName(event.campaign_id);
+        campaignTotals[campaignName] = (campaignTotals[campaignName] || 0) + (Number(event.clicks) || 0);
+      }
+
+      const labels = Object.keys(campaignTotals);
+      const data = Object.values(campaignTotals);
+
+      if (campaignChartInstance) {
+        campaignChartInstance.destroy();
+      }
+
+      campaignChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Clicks',
+            data: data
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false
+        }
+      });
     }
 
     async function addCampaign() {
@@ -384,7 +619,7 @@
 
         document.getElementById('campaign-name').value = '';
         showMessage('Campaign added successfully.', 'success');
-        await loadCampaigns();
+        await refreshAll();
       } catch (err) {
         showMessage(err.message, 'error');
       }
@@ -434,7 +669,132 @@
         document.getElementById('campaign-select').value = '';
 
         showMessage('Event added successfully.', 'success');
-        await loadEvents();
+        await refreshAll();
+      } catch (err) {
+        showMessage(err.message, 'error');
+      }
+    }
+
+    async function deleteEvent(eventId) {
+      clearMessage();
+
+      const event = events.find(e => e.id === eventId);
+      if (!event) return;
+
+      const ok = confirm(`Delete event "${event.name}"?`);
+      if (!ok) return;
+
+      try {
+        const deleteClicksRes = await fetch(
+          SUPABASE_URL + '/rest/v1/click_events?event_id=eq.' + encodeURIComponent(eventId),
+          {
+            method: 'DELETE',
+            headers
+          }
+        );
+
+        if (!deleteClicksRes.ok) {
+          const errText = await deleteClicksRes.text();
+          throw new Error('Could not delete click history: ' + errText);
+        }
+
+        const deleteEventRes = await fetch(
+          SUPABASE_URL + '/rest/v1/events?id=eq.' + encodeURIComponent(eventId),
+          {
+            method: 'DELETE',
+            headers
+          }
+        );
+
+        if (!deleteEventRes.ok) {
+          const errText = await deleteEventRes.text();
+          throw new Error('Could not delete event: ' + errText);
+        }
+
+        showMessage('Event deleted.', 'success');
+        await refreshAll();
+      } catch (err) {
+        showMessage(err.message, 'error');
+      }
+    }
+
+    async function deleteCampaign(campaignId) {
+      clearMessage();
+
+      const campaign = campaigns.find(c => c.id === campaignId);
+      if (!campaign) return;
+
+      const linkedEvents = events.filter(e => e.campaign_id === campaignId);
+      if (linkedEvents.length > 0) {
+        showMessage('You cannot delete a campaign that still has events. Delete or move the events first.', 'error');
+        return;
+      }
+
+      const ok = confirm(`Delete campaign "${campaign.name}"?`);
+      if (!ok) return;
+
+      try {
+        const res = await fetch(
+          SUPABASE_URL + '/rest/v1/campaigns?id=eq.' + encodeURIComponent(campaignId),
+          {
+            method: 'DELETE',
+            headers
+          }
+        );
+
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error('Could not delete campaign: ' + errText);
+        }
+
+        showMessage('Campaign deleted.', 'success');
+        await refreshAll();
+      } catch (err) {
+        showMessage(err.message, 'error');
+      }
+    }
+
+    async function resetEventClicks(eventId) {
+      clearMessage();
+
+      const event = events.find(e => e.id === eventId);
+      if (!event) return;
+
+      const ok = confirm(`Reset clicks for "${event.name}"?`);
+      if (!ok) return;
+
+      try {
+        const resetRes = await fetch(
+          SUPABASE_URL + '/rest/v1/events?id=eq.' + encodeURIComponent(eventId),
+          {
+            method: 'PATCH',
+            headers,
+            body: JSON.stringify({
+              clicks: 0
+            })
+          }
+        );
+
+        if (!resetRes.ok) {
+          const errText = await resetRes.text();
+          throw new Error('Could not reset event clicks: ' + errText);
+        }
+
+        const deleteClickLogRes = await fetch(
+          SUPABASE_URL + '/rest/v1/click_events?event_id=eq.' + encodeURIComponent(eventId),
+          {
+            method: 'DELETE',
+            headers
+          }
+        );
+
+        if (!deleteClickLogRes.ok) {
+          const errText = await deleteClickLogRes.text();
+          throw new Error('Could not clear click history: ' + errText);
+        }
+
+        showMessage('Event clicks reset.', 'success');
+        await refreshAll();
       } catch (err) {
         showMessage(err.message, 'error');
       }
@@ -486,6 +846,17 @@
       link.download = activeQrEvent.name.replace(/[^a-z0-9]/gi, '_').toLowerCase() + '_qr.png';
       link.href = canvas.toDataURL('image/png');
       link.click();
+    }
+
+    async function copyTrackingLink(eventId) {
+      const trackingLink = getTrackingLink(eventId);
+
+      try {
+        await navigator.clipboard.writeText(trackingLink);
+        showMessage('Tracking link copied.', 'success');
+      } catch (err) {
+        showMessage('Could not copy tracking link.', 'error');
+      }
     }
 
     async function handleRedirect() {
