@@ -56,6 +56,12 @@
       color: #666;
     }
 
+    .tracking-link {
+      display: inline-block;
+      margin-top: 6px;
+      word-break: break-all;
+    }
+
     #message {
       padding: 10px;
       border-radius: 8px;
@@ -80,9 +86,15 @@
 </head>
 <body>
   <h1>QR Tracker App</h1>
-  <p>This version connects to Supabase and lets you view campaigns and add events.</p>
+  <p>This version connects to Supabase, lets you create campaigns and events, and tracks clicks through redirect links.</p>
 
   <div id="message"></div>
+
+  <div class="card">
+    <h2>Add Campaign</h2>
+    <input type="text" id="campaign-name" placeholder="Campaign name" />
+    <button onclick="addCampaign()">Add Campaign</button>
+  </div>
 
   <div class="card">
     <h2>Add Event</h2>
@@ -130,6 +142,20 @@
       box.className = '';
     }
 
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function getTrackingLink(eventId) {
+      const base = window.location.href.split('?')[0];
+      return base + '?id=' + encodeURIComponent(eventId);
+    }
+
     async function loadCampaigns() {
       try {
         const res = await fetch(
@@ -170,7 +196,8 @@
     function populateCampaignDropdown() {
       const select = document.getElementById('campaign-select');
 
-      select.innerHTML = '<option value="">Select a campaign</option>' +
+      select.innerHTML =
+        '<option value="">Select a campaign</option>' +
         campaigns.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}</option>`).join('');
     }
 
@@ -207,14 +234,57 @@
         return;
       }
 
-      list.innerHTML = events.map(e => `
-        <div class="event">
-          <strong>${escapeHtml(e.name)}</strong><br>
-          <span>${escapeHtml(e.url)}</span><br>
-          <span class="small">Campaign: ${escapeHtml(getCampaignName(e.campaign_id))}</span><br>
-          <span class="small">Clicks: ${e.clicks ?? 0}</span>
-        </div>
-      `).join('');
+      list.innerHTML = events.map(e => {
+        const trackingLink = getTrackingLink(e.id);
+
+        return `
+          <div class="event">
+            <strong>${escapeHtml(e.name)}</strong><br>
+            <span>${escapeHtml(e.url)}</span><br>
+            <span class="small">Campaign: ${escapeHtml(getCampaignName(e.campaign_id))}</span><br>
+            <span class="small">Clicks: ${e.clicks ?? 0}</span><br>
+            <a class="tracking-link" href="${trackingLink}" target="_blank">${trackingLink}</a>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function addCampaign() {
+      clearMessage();
+
+      const name = document.getElementById('campaign-name').value.trim();
+
+      if (!name) {
+        showMessage('Please enter a campaign name.', 'error');
+        return;
+      }
+
+      const id = 'c' + Date.now();
+
+      try {
+        const res = await fetch(
+          SUPABASE_URL + '/rest/v1/campaigns',
+          {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              id: id,
+              name: name
+            })
+          }
+        );
+
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error('Could not add campaign: ' + errText);
+        }
+
+        document.getElementById('campaign-name').value = '';
+        showMessage('Campaign added successfully.', 'success');
+        await loadCampaigns();
+      } catch (err) {
+        showMessage(err.message, 'error');
+      }
     }
 
     async function addEvent() {
@@ -267,17 +337,80 @@
       }
     }
 
-    function escapeHtml(value) {
-      return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
+    async function handleRedirect() {
+      const params = new URLSearchParams(window.location.search);
+      const id = params.get('id');
+
+      if (!id) return false;
+
+      document.body.innerHTML = '<p style="font-family: Arial, sans-serif; padding: 20px;">Redirecting...</p>';
+
+      try {
+        const res = await fetch(
+          SUPABASE_URL + '/rest/v1/events?id=eq.' + encodeURIComponent(id),
+          { headers }
+        );
+
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error('Could not load event for redirect: ' + errText);
+        }
+
+        const data = await res.json();
+
+        if (!data.length) {
+          document.body.innerHTML = '<p style="font-family: Arial, sans-serif; padding: 20px;">Invalid link.</p>';
+          return true;
+        }
+
+        const event = data[0];
+
+        const updateRes = await fetch(
+          SUPABASE_URL + '/rest/v1/events?id=eq.' + encodeURIComponent(id),
+          {
+            method: 'PATCH',
+            headers,
+            body: JSON.stringify({
+              clicks: (event.clicks || 0) + 1
+            })
+          }
+        );
+
+        if (!updateRes.ok) {
+          const errText = await updateRes.text();
+          throw new Error('Could not update click count: ' + errText);
+        }
+
+        const clickLogRes = await fetch(
+          SUPABASE_URL + '/rest/v1/click_events',
+          {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              event_id: id
+            })
+          }
+        );
+
+        if (!clickLogRes.ok) {
+          const errText = await clickLogRes.text();
+          throw new Error('Could not log click event: ' + errText);
+        }
+
+        window.location.href = event.url;
+      } catch (err) {
+        document.body.innerHTML = '<p style="font-family: Arial, sans-serif; padding: 20px;">Error tracking click: ' + escapeHtml(err.message) + '</p>';
+      }
+
+      return true;
     }
 
     async function init() {
       clearMessage();
+
+      const isRedirect = await handleRedirect();
+      if (isRedirect) return;
+
       await loadCampaigns();
       await loadEvents();
     }
