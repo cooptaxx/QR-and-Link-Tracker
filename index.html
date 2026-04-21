@@ -559,12 +559,20 @@
       const dailyTotals = {};
       for (const click of clickEvents) {
         if (!click.clicked_at) continue;
-        const day = new Date(click.clicked_at).toLocaleDateString('en-GB');
-        dailyTotals[day] = (dailyTotals[day] || 0) + 1;
+
+        const dateObj = new Date(click.clicked_at);
+        const key = dateObj.toISOString().split('T')[0];
+        dailyTotals[key] = (dailyTotals[key] || 0) + 1;
       }
 
-      const labels = Object.keys(dailyTotals);
-      const data = Object.values(dailyTotals);
+      const sortedKeys = Object.keys(dailyTotals).sort();
+
+      const labels = sortedKeys.map(key => {
+        const d = new Date(key);
+        return d.toLocaleDateString('en-GB');
+      });
+
+      const data = sortedKeys.map(key => dailyTotals[key]);
 
       if (timeChartInstance) {
         timeChartInstance.destroy();
@@ -884,10 +892,6 @@
       }
     }
 
-    async function getLocationData() {
-      return { country: null, city: null };
-    }
-
     async function handleRedirect() {
       const params = new URLSearchParams(window.location.search);
       const id = params.get('id');
@@ -931,17 +935,13 @@
           throw new Error('Could not update click count: ' + errText);
         }
 
-        const locationData = await getLocationData();
-
         const clickLogRes = await fetch(
           SUPABASE_URL + '/rest/v1/click_events',
           {
             method: 'POST',
             headers,
             body: JSON.stringify({
-              event_id: id,
-              country: locationData.country,
-              city: locationData.city
+              event_id: id
             })
           }
         );
