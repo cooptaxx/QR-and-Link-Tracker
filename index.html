@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>QR Tracker App</title>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -48,7 +49,7 @@
 
     .event {
       border-bottom: 1px solid #eee;
-      padding: 10px 0;
+      padding: 12px 0;
     }
 
     .small {
@@ -60,6 +61,32 @@
       display: inline-block;
       margin-top: 6px;
       word-break: break-all;
+    }
+
+    .event-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+
+    .event-actions button,
+    .event-actions a {
+      width: auto;
+    }
+
+    .link-btn {
+      display: inline-block;
+      padding: 10px 14px;
+      background: #eee;
+      color: #222;
+      border-radius: 8px;
+      text-decoration: none;
+      font-size: 14px;
+    }
+
+    .link-btn:hover {
+      background: #ddd;
     }
 
     #message {
@@ -82,11 +109,69 @@
       background: #eaf7ea;
       color: #2f6b2f;
     }
+
+    .modal-bg {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .modal-bg.open {
+      display: flex;
+    }
+
+    .modal-box {
+      background: white;
+      border-radius: 12px;
+      padding: 20px;
+      width: 90%;
+      max-width: 360px;
+      text-align: center;
+    }
+
+    .modal-box canvas {
+      margin: 16px auto;
+      display: block;
+    }
+
+    .modal-title {
+      font-size: 20px;
+      font-weight: bold;
+      margin-bottom: 8px;
+    }
+
+    .modal-sub {
+      font-size: 12px;
+      color: #666;
+      word-break: break-all;
+      margin-bottom: 12px;
+    }
+
+    .modal-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .modal-actions button {
+      width: auto;
+    }
+
+    .redirecting {
+      font-family: Arial, sans-serif;
+      padding: 30px;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
   <h1>QR Tracker App</h1>
-  <p>This version connects to Supabase, lets you create campaigns and events, and tracks clicks through redirect links.</p>
+  <p>This version connects to Supabase, lets you create campaigns and events, tracks clicks, and generates QR codes.</p>
 
   <div id="message"></div>
 
@@ -116,6 +201,18 @@
     <div id="event-list">Loading events...</div>
   </div>
 
+  <div class="modal-bg" id="qr-modal">
+    <div class="modal-box">
+      <div class="modal-title" id="qr-title">QR Code</div>
+      <div class="modal-sub" id="qr-subtitle"></div>
+      <div id="qr-render"></div>
+      <div class="modal-actions">
+        <button onclick="downloadQR()">Download PNG</button>
+        <button onclick="closeQRModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const SUPABASE_URL = 'https://fsnjpxyeqbctmffhkelv.supabase.co';
     const SUPABASE_KEY = 'sb_publishable_5WySpn-4drNBRgC3c9Kcxg_GSj6ow-R';
@@ -129,6 +226,7 @@
 
     let campaigns = [];
     let events = [];
+    let activeQrEvent = null;
 
     function showMessage(text, type = 'success') {
       const box = document.getElementById('message');
@@ -244,6 +342,11 @@
             <span class="small">Campaign: ${escapeHtml(getCampaignName(e.campaign_id))}</span><br>
             <span class="small">Clicks: ${e.clicks ?? 0}</span><br>
             <a class="tracking-link" href="${trackingLink}" target="_blank">${trackingLink}</a>
+
+            <div class="event-actions">
+              <button onclick="showQR('${escapeHtml(e.id)}')">Show QR</button>
+              <a class="link-btn" href="${trackingLink}" target="_blank">Open Tracking Link</a>
+            </div>
           </div>
         `;
       }).join('');
@@ -337,13 +440,61 @@
       }
     }
 
+    function showQR(eventId) {
+      const event = events.find(e => e.id === eventId);
+      if (!event) return;
+
+      activeQrEvent = event;
+
+      const trackingLink = getTrackingLink(event.id);
+      document.getElementById('qr-title').textContent = event.name;
+      document.getElementById('qr-subtitle').textContent = trackingLink;
+
+      const qrRender = document.getElementById('qr-render');
+      qrRender.innerHTML = '';
+
+      const canvas = document.createElement('canvas');
+      qrRender.appendChild(canvas);
+
+      QRCode.toCanvas(
+        canvas,
+        trackingLink,
+        {
+          width: 220,
+          margin: 2
+        },
+        function(error) {
+          if (error) {
+            qrRender.innerHTML = '<p style="color:red;">Could not generate QR code.</p>';
+          }
+        }
+      );
+
+      document.getElementById('qr-modal').classList.add('open');
+    }
+
+    function closeQRModal() {
+      document.getElementById('qr-modal').classList.remove('open');
+      activeQrEvent = null;
+    }
+
+    function downloadQR() {
+      const canvas = document.querySelector('#qr-render canvas');
+      if (!canvas || !activeQrEvent) return;
+
+      const link = document.createElement('a');
+      link.download = activeQrEvent.name.replace(/[^a-z0-9]/gi, '_').toLowerCase() + '_qr.png';
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }
+
     async function handleRedirect() {
       const params = new URLSearchParams(window.location.search);
       const id = params.get('id');
 
       if (!id) return false;
 
-      document.body.innerHTML = '<p style="font-family: Arial, sans-serif; padding: 20px;">Redirecting...</p>';
+      document.body.innerHTML = '<div class="redirecting">Redirecting...</div>';
 
       try {
         const res = await fetch(
@@ -359,7 +510,7 @@
         const data = await res.json();
 
         if (!data.length) {
-          document.body.innerHTML = '<p style="font-family: Arial, sans-serif; padding: 20px;">Invalid link.</p>';
+          document.body.innerHTML = '<div class="redirecting">Invalid link.</div>';
           return true;
         }
 
@@ -399,7 +550,7 @@
 
         window.location.href = event.url;
       } catch (err) {
-        document.body.innerHTML = '<p style="font-family: Arial, sans-serif; padding: 20px;">Error tracking click: ' + escapeHtml(err.message) + '</p>';
+        document.body.innerHTML = '<div class="redirecting">Error tracking click: ' + escapeHtml(err.message) + '</div>';
       }
 
       return true;
